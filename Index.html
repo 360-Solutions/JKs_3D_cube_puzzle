@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>JKs Cube - v 0.3.2</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #222;
+            touch-action: none;
+        }
+        canvas {
+            display: block;
+        }
+        #ui-layer {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            font-family: sans-serif;
+            font-size: 16px;
+            pointer-events: none;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 10px;
+            border-radius: 8px;
+            line-height: 1.5;
+        }
+        #highlight {
+            color: #4CAF50;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <strong>JKs Cube Puzzle v 0.3.2: </strong><br>
+        <br>
+        <span id="debug-output">Tap a sticker to rotate...</span>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tween.js/18.6.4/tween.umd.js"></script>
+
+    <script>
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(5, 5, 5);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true; 
+        controls.dampingFactor = 0.05;
+        controls.enablePan = false; 
+
+        const cubeGroup = new THREE.Group();
+        scene.add(cubeGroup);
+
+        const pieceSize = 1;
+        const spacing = 1.05; 
+        let isAnimating = false; 
+
+        const colors = {
+            right:  0xB71234, left:   0xFF5800,
+            top:    0xFFFFFF, bottom: 0xFFD500,
+            front:  0x009B48, back:   0x0046AD
+        };
+        const black = 0x000000;
+
+        for (let x = -1; x <= 1; x++) {
+            for (let y = -1; y <= 1; y++) {
+                for (let z = -1; z <= 1; z++) {
+                    const typeSum = Math.abs(x) + Math.abs(y) + Math.abs(z);
+                    if (typeSum === 0) continue; 
+
+                    let pieceType = '';
+                    if (typeSum === 1) pieceType = 'Center';
+                    if (typeSum === 2) pieceType = 'Edge';
+                    if (typeSum === 3) pieceType = 'Corner';
+
+                    const materials = [
+                        new THREE.MeshBasicMaterial({ color: x === 1 ? colors.right : black }),
+                        new THREE.MeshBasicMaterial({ color: x === -1 ? colors.left : black }),
+                        new THREE.MeshBasicMaterial({ color: y === 1 ? colors.top : black }),
+                        new THREE.MeshBasicMaterial({ color: y === -1 ? colors.bottom : black }),
+                        new THREE.MeshBasicMaterial({ color: z === 1 ? colors.front : black }),
+                        new THREE.MeshBasicMaterial({ color: z === -1 ? colors.back : black })
+                    ];
+
+                    const geometry = new THREE.BoxGeometry(pieceSize, pieceSize, pieceSize);
+                    const piece = new THREE.Mesh(geometry, materials);
+                    piece.position.set(x * spacing, y * spacing, z * spacing);
+                    
+                    piece.userData = { type: pieceType, gridPosition: { x, y, z } };
+                    cubeGroup.add(piece);
+                }
+            }
+        }
+
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+        const debugOutput = document.getElementById('debug-output');
+
+        let pointerDownTime = 0;
+        let pointerDownPos = { x: 0, y: 0 };
+
+        function onPointerDown(event) {
+            pointerDownTime = Date.now();
+            pointerDownPos.x = event.clientX;
+            pointerDownPos.y = event.clientY;
+        }
+
+        function onPointerUp(event) {
+            if (isAnimating) return; 
+
+            const pointerUpTime = Date.now();
+            const timeDiff = pointerUpTime - pointerDownTime;
+            const dx = event.clientX - pointerDownPos.x;
+            const dy = event.clientY - pointerDownPos.y;
+            const distanceMoved = Math.sqrt(dx * dx + dy * dy);
+
+            if (timeDiff > 300 || distanceMoved > 10) return; 
+
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObjects(cubeGroup.children);
+
+            if (intersects.length > 0) {
+                const hitObject = intersects[0].object;
+                const type = hitObject.userData.type;
+                const gridPos = hitObject.userData.gridPosition;
+
+                const worldNormal = intersects[0].face.normal.clone().transformDirection(hitObject.matrixWorld).round();
+                const W = intersects[0].point; 
+                const cx = gridPos.x * spacing;
+                const cy = gridPos.y * spacing;
+                const cz = gridPos.z * spacing;
+                const O = new THREE.Vector3(W.x - cx, W.y - cy, W.z - cz);
+
+                let P = new THREE.Vector3(0, 0, 0);
+
+                if (type === 'Corner') {
+                    let axis1 = worldNormal.x === 0 ? 'x' : 'y';
+                    let axis2 = worldNormal.z === 0 ? 'z' : 'y';
+                    if (worldNormal.x === 0 && worldNormal.z === 0) { axis1 = 'x'; axis2 = 'z'; }
+
+                    let u = O[axis1] * Math.sign(gridPos[axis1]);
+                    let v = O[axis2] * Math.sign(gridPos[axis2]);
+
+                    if (u > v) P[axis1] = Math.sign(gridPos[axis1]);
+                    else P[axis2] = Math.sign(gridPos[axis2]);
+                } else if (type === 'Edge') {
+                    // EDGE PIECE: Inverted sign here to fix the "backwards" direction
+                    if (worldNormal.x === 0 && gridPos.x !== 0) P.x = Math.sign(gridPos.x);
+                    if (worldNormal.y === 0 && gridPos.y !== 0) P.y = Math.sign(gridPos.y);
+                    if (worldNormal.z === 0 && gridPos.z !== 0) P.z = Math.sign(gridPos.z);
+                } else {
+                    debugOutput.innerHTML = `<span id="highlight">Center tapped. Do nothing.</span>`;
+                    return;
+                }
+
+                const R = new THREE.Vector3().crossVectors(worldNormal, P);
+                let intentAxis = '';
+                let direction = 1; 
+                
+                if (Math.abs(R.x) > 0.5) { intentAxis = 'x'; direction = Math.sign(R.x); }
+                else if (Math.abs(R.y) > 0.5) { intentAxis = 'y'; direction = Math.sign(R.y); }
+                else if (Math.abs(R.z) > 0.5) { intentAxis = 'z'; direction = Math.sign(R.z); }
+
+                const layerIndex = gridPos[intentAxis];
+                debugOutput.innerHTML = `Rotating <strong>${intentAxis.toUpperCase()}</strong> axis layer ${layerIndex}`;
+                rotateLayer(intentAxis, layerIndex, direction);
+            }
+        }
+
+        function rotateLayer(axis, layerIndex, direction) {
+            isAnimating = true;
+            const pivot = new THREE.Object3D();
+            scene.add(pivot);
+            const activePieces = [];
+            
+            for (let i = cubeGroup.children.length - 1; i >= 0; i--) {
+                const piece = cubeGroup.children[i];
+                if (piece.userData.gridPosition[axis] === layerIndex) {
+                    activePieces.push(piece);
+                    pivot.attach(piece); 
+                }
+            }
+
+            new TWEEN.Tween(pivot.rotation)
+                .to({ [axis]: (Math.PI / 2) * direction }, 350) 
+                .easing(TWEEN.Easing.Quadratic.InOut)
+                .onComplete(() => {
+                    activePieces.forEach(piece => {
+                        cubeGroup.attach(piece);
+                        piece.position.set(Math.round(piece.position.x/spacing)*spacing, Math.round(piece.position.y/spacing)*spacing, Math.round(piece.position.z/spacing)*spacing);
+                        piece.userData.gridPosition.x = Math.round(piece.position.x/spacing);
+                        piece.userData.gridPosition.y = Math.round(piece.position.y/spacing);
+                        piece.userData.gridPosition.z = Math.round(piece.position.z/spacing);
+                    });
+                    scene.remove(pivot);
+                    isAnimating = false;
+                })
+                .start();
+        }
+
+        window.addEventListener('pointerdown', onPointerDown);
+        window.addEventListener('pointerup', onPointerUp);
+        function animate() { requestAnimationFrame(animate); controls.update(); TWEEN.update(); renderer.render(scene, camera); }
+        animate();
+    </script>
+</body>
+</html>
